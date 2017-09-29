@@ -1,0 +1,222 @@
+---
+title: "Exploring the BRFSS Data"
+author: "David Kochar"
+date: "October 1, 2017"
+output: 
+  html_document: 
+  keep_md: true
+---
+
+## Setup
+
+### Set Global Options
+
+```{r setupknitr}
+list.of.packages <- c("knitr")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages, repos = "http://cran.us.r-project.org")
+suppressWarnings ( suppressMessages ( library ( knitr ) ) )
+knitr::opts_chunk$set(fig.width=8, fig.height=4, fig.path='figures/DataAnalysisProject_', echo=TRUE, warning=FALSE, message=FALSE)
+```
+
+### Prepare Workspace and Load Libraries
+
+```{r load-packages}
+#Clear variables
+rm ( list = ls ( all = TRUE ) )
+#Get and set working directory
+setwd ( getwd ( ) )
+#Check installed status of requried packages, and install if necessary
+list.of.packages <- c("dplyr", "ggplot2", "scales", "readxl", "kableExtra")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages, repos = "http://cran.us.r-project.org")
+suppressWarnings ( suppressMessages ( library ( dplyr ) ) )
+suppressWarnings ( suppressMessages ( library ( ggplot2 ) ) )
+suppressWarnings ( suppressMessages ( library ( scales ) ) )
+suppressWarnings ( suppressMessages ( library ( readxl ) ) )
+suppressWarnings ( suppressMessages ( library ( kableExtra ) ) )
+```
+
+## Load data
+
+```{r load-data}
+#Download and load the brfss2013 data set
+BRFSS <- load ( url ( "https://d18ky98rnyall9.cloudfront.net/_384b2d9eda4b29131fb681b243a7767d_brfss2013.RData?Expires=1506816000&Signature=f6F5RNONXaCBBZwRtL7-mvVgbKHFUBSJVq5~eHnKfLYC0kxH7LwmPIVrg4RoWztBDV5xvHB25tt6Vvpr4me5bfJ6LKhyUOIBRP0bUH5QPolkth0G9b4DTrui3uojAFEAEKB5Xi3dZcMlmfseaYtzxx0n3ZFPSlR7R5jdc-m4tSI_&Key-Pair-Id=APKAJLTNE6QMUY6HBC5A" ) )
+
+#Download a set of FIPS Codes to get Regions
+download.file ( "https://www2.census.gov/programs-surveys/popest/geographies/2011/state-geocodes-v2011.xls", "state-geocodes-v2011.xls", mode = "wb" )
+
+#Load the raw Excel File
+suppressWarnings ( FIPSCodesRaw <- read_excel ( "state-geocodes-v2011.xls", sheet = 1, col_names = c ( "RegionFIPSCode", "DivisionFIPSCode", "StateFIPSCode", "Name" ), col_types = c ( "numeric", "numeric", "numeric", "text" ), na = "", skip = 6 ) )
+
+#Create rows for the Territories
+TerritoriesFIPSCodesRaw <- data.frame ( RegionFIPSCode = c ( 5, 5, 5 ), DivisionFIPSCode = c ( 0, 0, 0 ), StateFIPSCode = c ( 0, 66, 72 ), Name = c ( "Territories", "Guam", "Puerto Rico" ) ) 
+
+#Insert the Territories rows to FIPSCodesRaw
+FullFIPSCodes <- rbind ( FIPSCodesRaw, TerritoriesFIPSCodesRaw )
+
+#Filter the data for States-only, create a the Region Description, and select the State FIPS Code and Region
+suppressWarnings ( FullFIPSCodes <- FullFIPSCodes %>%
+    filter ( StateFIPSCode != 0 ) %>%
+    mutate ( Region = case_when ( RegionFIPSCode == 1 ~ "Northeast", RegionFIPSCode == 2 ~ "Midwest", RegionFIPSCode == 3 ~ "South", RegionFIPSCode == 4	 ~ "West", RegionFIPSCode == 5 ~ "Territories" ), StateFIPSCode = as.factor ( StateFIPSCode ) ) %>%
+      select ( Name, Region ) ) 
+
+#Join the Region set to the BRFSS set
+suppressWarnings ( brfss2013 <- brfss2013 %>% inner_join ( FullFIPSCodes, c ( "X_state" = "Name" ) ) )
+
+```
+
+
+
+* * *
+
+## Part 1: Data
+
+This analysis uses data from the Behavioral Risk Factor Surveillance System (BRFSS). The BRFSS collects data about U.S. residents regarding their health-related risk behaviors, chronic health conditions, and use of preventive services.
+
+With technical and methodological assistance from CDC, state health departments use in-house interviewers or contract with telephone call centers or universities to administer the BRFSS surveys continuously through the year. The states use a standardized core questionnaire, optional modules, and state-added questions. The survey is conducted using Random Digit Dialing (RDD) techniques on both landlines and cell phones. [@https://www.cdc.gov/brfss/about/brfss_faq.htm]
+
+The scope of inference for this data is limited to generalizability because it is an observational study, i.e. no manipulation of independent variables occured.
+
+Futhermore, data is collected from land-line and cellular telephone interviews via random-digit dialing which excludes institutionalized individuals.
+
+Since data collection is limited to telephone interviews & institutionalized individuals, and the questions are health-related, several biases could be introduced into the data:
+
+* **Undercoverage**: Undercoverage could occur because individuals without a telephone and institutionalized are excluded.
+* **Social Desirability**: Since the questions are health-related, respondents may be reluctant to admit poor health habits
+* **Voluntary response**: Since the interviews are unscheduled and lengthy, individuals with more free time are more likely to respond
+
+* * *
+
+## Part 2: Research questions
+
+**Research Question 1:**
+
+Do smoking rates correlate with Angina Or Coronary Heart Disease, and how does this vary by region?
+
+**Research Question 2:**
+
+Does mental health correlate with the amount of sleep, and how does this vary by depression felt in the past 30 days?
+
+**Research Question 3:**
+
+What is the average rate of drinking on comparative months over time, and how does this vary by education level?
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+###Research Question 1: Do smoking rates correlate with Angina Or Coronary Heart Disease, and how does this vary by region?
+
+**Create two new variables:**
+
+* CoronaryHeartDiseaseRank from cvdcrhd4 to describe if an individual was ever diagnosed with Angina Or Coronary Heart Disease
+* CalculatedSmokingRank from X_smoker3 to create a discrete smoking rate (1-4). "0" is an unknown rate, "1" is 'Never Smoked,' "2" is 'Former smoker,' "3" is 'Current smoker - now smokes some days', "4" is 'Current smoker - now smokes every day.' So, as CoronaryHeartDiseaseRank increases, so does the smoking rate 
+
+```{r}
+brfss2013Sub1 <- brfss2013 %>%
+    select ( Region, cvdcrhd4, X_smoker3 ) %>%
+    mutate ( CoronaryHeartDiseaseRank = case_when ( cvdcrhd4 == "Yes" ~ "Diagnosed", cvdcrhd4 == "No" ~ "Not Diagnosed", TRUE ~ "Unknown" ), 
+             CalculatedSmokingRank = case_when ( X_smoker3 == "Never smoked" ~ 1, X_smoker3 == "Former smoker" ~ 2, X_smoker3 == "Current smoker - now smokes some days" ~ 3, X_smoker3 == "Current smoker - now smokes every day" ~ 4, TRUE ~ 0 )) %>%
+    select ( Region, CoronaryHeartDiseaseRank, CalculatedSmokingRank )
+```
+
+**Plot distributions of Smoking Rates by Diagnosis Status and Region**
+```{r}
+#Count the occurences by Region, CoronaryHeartDiseaseRank, CalculatedSmokingRank
+brfss2013Sub1Summary <- brfss2013Sub1 %>% 
+                        group_by ( Region, CoronaryHeartDiseaseRank, CalculatedSmokingRank ) %>%
+                        summarise ( Count = n() )
+
+#Calculate the percent of occurences		
+brfss2013Sub1Summary2 <- brfss2013Sub1Summary %>%
+                         group_by(Region, CoronaryHeartDiseaseRank) %>%
+                         mutate ( Percent = Count / sum ( Count ) )
+#Plot the distribution	
+ggplot(brfss2013Sub1Summary2, aes(x = factor(CalculatedSmokingRank), y = Percent )) +  
+    geom_bar(stat = "identity", fill = "blue", colour="blue") + 
+    labs(title = "Angina Or Coronary Heart Disease Diagnosis & Smoking Rates by Region", x = "Smoking Rate") +
+    geom_text(aes(label = paste(round(Percent, digits = 2) * 100, "%", sep = "")), vjust = -0.5, size = 3) +
+    scale_y_continuous(limits = c(0, 1), labels = percent) +
+    facet_grid(CoronaryHeartDiseaseRank ~ Region, scales="free_y") +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+```
+
+
+We can see how smoking rates increase when individuals are diagnosed with Angina Or Coronary Heart Disease, as the percent of Former Smokers (Smoking Rate = 2) increases in all regions when the individual has been diagnosed.
+
+Let's compare the contribution of smokers for each diagnosis status. In other words, we will compare the sum of smoking rates 2-4 (the person has smoked or is still smoking) between individuals diagnosed and those not diagnosed.
+```{r}
+#Filter for smokers (CalculatedSmokingRank of 2-4) and create a pivot table
+brfss2013Sub1Summary3 <- brfss2013Sub1Summary2 %>%
+    filter ( CalculatedSmokingRank %in% c("2", "3", "4") ) %>%
+    group_by (Region, CoronaryHeartDiseaseRank) %>%
+    summarise ( Total = sum(Percent)) %>%
+    mutate ( DiagnosedPivot = case_when ( CoronaryHeartDiseaseRank == "Diagnosed" ~ Total ), NotDiagnosedPivot = case_when ( CoronaryHeartDiseaseRank == "Not Diagnosed" ~ Total ) ) %>%
+    group_by ( Region ) %>%
+    summarise ( Diagnosed = max(DiagnosedPivot, na.rm = TRUE), NotDiagnosed = max(NotDiagnosedPivot, na.rm = TRUE) ) %>%
+    mutate ( Diagnosed = paste( round (Diagnosed, digits = 3 )* 100, "%", sep = "" ), NotDiagnosed = paste( round (NotDiagnosed, digits = 3 ) * 100, "%", sep = "" ) ) %>%
+  arrange ( desc(Diagnosed))
+
+#Display the pivot table
+brfss2013Sub1Summary3 %>%
+                    kable("html") %>%
+                    kable_styling()
+```
+
+
+We can clearly see smoking rates are higher for those diagnosed with Angina Or Coronary Heart Disease. Also, there are not significant differences in diagnoses between regions, except for the Territories. The Territories have the lowest rate, but also had the lowest number of respondents.
+
+
+###Research Question 2: Does mental health correlate with the amount of sleep, and how does this vary by depression felt in the past 30 days?
+
+**Plot scatterplots of Hours of Sleep vs. Number of Days of Poor Mental Health By Depression Felt**
+```{r}
+#Subset to select variables of interest and remove NA values
+brfss2013Scatter <- brfss2013 %>% 
+                    select ( sleptim1, menthlth, misdeprd ) %>%
+                    na.omit( )
+
+#Create the scatter plot
+ggplot(brfss2013Scatter, aes(x=sleptim1, y=menthlth)) +
+    geom_point(size = 2, shape=1) +    # Use hollow circles
+    labs(title = "Hours of Sleep & Number of Poor Mental Health Not Good Days by Depression Felt", x = "Hours of Sleep", y = "Number of Days of Poor Mental Health") +
+  scale_x_continuous(limits = c(0, 24)) +
+  scale_y_continuous(breaks=seq(0,30,5), limits = c(0, 30)) +  
+  geom_smooth(method=lm) +  # Add linear regression line 
+  facet_wrap( ~ misdeprd, ncol=2)
+```
+
+
+We can see a slight negative correlation between hours of sleep Poor Mental Health Not Good Days, which is expected. What's interesting is the correlation is comparatively weaker when depression was felt on All" days, except on "Most" days when the correlation is ironically positive.
+
+
+###Research Question 3: What is the average rate of drinking on comparative months over time, and how does the vary by education level?
+
+**Plot time-series of the average number of alcoholic drinks per day in the past 30 days by education level**
+
+```{r}
+#Subset to select variables of interest and remove NA values
+brfss2013TimeSeries <- brfss2013 %>%
+                       select ( imonth, educa, avedrnk2 ) %>%
+					             na.omit( ) %>%                     
+                       group_by(imonth, educa) %>%
+                       summarise ( AvgDrinks = mean ( avedrnk2, na.rm = TRUE ) )
+#Plot the Time Series
+ggplot(brfss2013TimeSeries, aes(x=imonth, y=AvgDrinks, group = 1)) +
+        geom_line(colour = "blue") +    
+        labs(title = "Average number of alcoholic drinks per day in the past 30 days by Month and Education Level", x = "Month", y = "Average Number of Drinks") +
+		  theme(axis.text.x=element_text(angle=90, hjust=1), panel.grid.major =     element_blank(),   panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+	    facet_wrap( ~ educa, ncol=2)
+
+brfss2013DrinkAvg <- brfss2013TimeSeries %>%
+                     group_by (educa) %>%
+                     summarise ( AvgerageDrinksinPast30Days = mean ( AvgDrinks ) ) 
+
+brfss2013DrinkAvg %>%
+                    kable("html") %>%
+                    kable_styling()
+```
+
+
+A drinking seasonality effect appears only to affect people of lower education, where there are spikes in late summer and early winter for those that Never attended school or only Kindergarten. What's really striking is the dramatic difference in average consumption between those with 4 or more years of college and those that never attended school, and volatility of drinking trends as education decreases.
